@@ -17,6 +17,7 @@ shown side by side — you decide which to use based on what's real.
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import time
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Data Validation", layout="centered")
@@ -74,9 +75,26 @@ INTERNAL_GAP_THRESHOLD_DAYS = 10  # any single gap between rows bigger than this
 HIGH_MISSING_PCT_THRESHOLD = 8.0  # % missing vs expected business days = suspicious
 
 
-def check_ticker(ticker):
+def check_ticker(ticker, max_retries=3):
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            hist = yf.Ticker(ticker).history(period="max")
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if "Too Many Requests" in str(e) or "rate limit" in str(e).lower():
+                time.sleep(3 * (attempt + 1))  # back off harder each retry
+                continue
+            break  # a real error (not rate-limiting) - no point retrying
+    else:
+        hist = None
+
+    if last_error is not None:
+        return {"status": f"ERROR: {last_error}"}
+
     try:
-        hist = yf.Ticker(ticker).history(period="max")
         if hist.empty:
             return {"status": "EMPTY"}
         hist = hist.dropna(subset=["Close"])
@@ -182,6 +200,13 @@ if st.button("Run validation", type="primary", use_container_width=True):
     )
 
     st.divider()
+    st.download_button(
+        "Download full results as CSV",
+        data=df.to_csv(index=False),
+        file_name="ticker_validation_results.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
     st.caption(
         "pct_missing is measured against business days (Mon-Fri), not a true exchange "
         "holiday calendar — so 2-4% missing on a clean ticker is normal (public holidays), "
